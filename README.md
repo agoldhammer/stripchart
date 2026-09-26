@@ -12,6 +12,29 @@ cargo build --release
 ./target/release/stripchart --demo
 ```
 
+## stripchartw: the chart in a window
+
+`stripchartw` draws the chart mode in a graphics window instead of the terminal. It takes the same input sources and most of the same options (`--paper`, `--width`, `--mark` and `--no-color` apply only to the terminal), plus `--size WxH` for the initial window size.
+
+```
+./target/release/stripchartw --demo
+some-command | ./target/release/stripchartw --lanes
+```
+
+It uses [egui](https://github.com/emilk/egui), so it runs anywhere a window can be opened. Under WSL, the window appears on the Windows desktop through WSLg. Running `cargo build --release` on Windows itself produces a native `stripchartw.exe`, and there `--cmd` runs its command through `cmd /C`.
+
+The keyboard keys are the same as in chart mode. The mouse also works:
+
+| Mouse | |
+|---|---|
+| drag, horizontal scroll | scroll through time (pauses) |
+| wheel | shorten or lengthen the time span |
+| double-click | return to live |
+| hover | cursor line with the time and every channel's value |
+| click a legend entry | show or hide that channel |
+
+To build only the terminal program, and skip the GUI dependencies, run `cargo build --release --no-default-features`. Building the GUI needs Rust 1.95 or newer.
+
 ## Input
 
 Each line of input is one sample. The timestamp is the time the line arrives.

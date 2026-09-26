@@ -1,35 +1,32 @@
-//! stripchart — a strip chart recorder for the terminal.
+//! stripchartw — the strip chart recorder in a window instead of the terminal.
 
-mod paper;
-mod tui;
+mod app;
 
 use std::fs::File;
-use std::io::{self, IsTerminal};
+use std::io;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::mpsc;
 use std::time::Duration;
 
 use clap::Parser;
-use stripchart::{data, parse, scale, source};
-
-use crate::data::Recorder;
+use stripchart::data::Recorder;
+use stripchart::{parse, source};
 
 #[derive(Parser)]
 #[command(
     version,
-    about = "A strip chart recorder for the terminal",
-    long_about = "A strip chart recorder for the terminal.\n\n\
+    about = "A strip chart recorder in a window",
+    long_about = "A strip chart recorder in a window.\n\n\
         Reads numbers line by line and plots them against time. Each line is one \
         sample; values separated by spaces, commas or semicolons go to channels \
         1, 2, 3... Named values (temp=21.5 or rh:40) go to channels by name, and a \
         first line of words names the channels. Trailing units are ignored.",
     after_help = "Examples:\n  \
-        stripchart --demo\n  \
-        vmstat 1 | awk 'NR>2 {print $13, $14; fflush()}' | stripchart -n user,sys --min 0 --max 100\n  \
-        stripchart -c \"cut -d' ' -f1 /proc/loadavg\" -i 2s -s 10m\n  \
-        stripchart /dev/ttyUSB0 -o log.csv\n  \
-        ping localhost | grep --line-buffered -o 'time=[0-9.]*' | stripchart --paper"
+        stripchartw --demo\n  \
+        vmstat 1 | awk 'NR>2 {print $13, $14; fflush()}' | stripchartw -n user,sys --min 0 --max 100\n  \
+        stripchartw -c \"cut -d' ' -f1 /proc/loadavg\" -i 2s -s 10m\n  \
+        stripchartw /dev/ttyUSB0 -o log.csv"
 )]
 struct Cli {
     /// File, FIFO or serial device to read (default: stdin)
@@ -71,33 +68,26 @@ struct Cli {
     #[arg(short, long, value_name = "FILE")]
     output: Option<PathBuf>,
 
-    /// Paper mode: scroll down one row per sample instead of full screen
-    #[arg(short, long)]
-    paper: bool,
-
-    /// Paper mode width (default: terminal width)
-    #[arg(short, long)]
-    width: Option<usize>,
-
-    /// Paper mode: timestamp every N rows
-    #[arg(long, default_value_t = 10, value_name = "N")]
-    mark: usize,
-
     /// Maximum samples kept in memory for scrolling back
     #[arg(long, default_value_t = 500_000, value_name = "N")]
     history: usize,
 
-    /// Paper mode: disable colors (also honors NO_COLOR)
-    #[arg(long)]
-    no_color: bool,
+    /// Initial window size in pixels
+    #[arg(long, value_name = "WxH", default_value = "1100x640", value_parser = parse_size)]
+    size: (f32, f32),
+}
+
+fn parse_size(s: &str) -> Result<(f32, f32), String> {
+    let (w, h) = s.split_once(['x', 'X']).ok_or("expected WIDTHxHEIGHT, e.g. 1100x640")?;
+    let px = |v: &str| v.trim().parse::<f32>().ok().filter(|&n| n >= 200.0).ok_or("width and height must be at least 200");
+    Ok((px(w)?, px(h)?))
 }
 
 fn main() -> ExitCode {
     match run(Cli::parse()) {
         Ok(()) => ExitCode::SUCCESS,
-        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("stripchart: {e}");
+            eprintln!("stripchartw: {e}");
             ExitCode::FAILURE
         }
     }
@@ -114,21 +104,21 @@ fn run(cli: Cli) -> io::Result<()> {
     source::start(cli.input, cli.cmd, cli.demo, cli.interval, tx)?;
 
     let log = cli.output.map(File::create).transpose()?;
-    let mut rec = Recorder::new(cli.names, cli.history, log);
+    let rec = Recorder::new(cli.names, cli.history, log);
+    let opts = app::Options { span: cli.span.as_secs_f64(), lanes: cli.lanes, min: cli.min, max: cli.max };
 
-    if cli.paper {
-        let color = !cli.no_color && io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
-        let width = cli
-            .width
-            .or_else(|| crossterm::terminal::size().ok().map(|(w, _)| w as usize))
-            .unwrap_or(80);
-        let opts = paper::Options { width, lanes: cli.lanes, min: cli.min, max: cli.max, color, mark_every: cli.mark };
-        paper::run(&mut rec, rx, opts)
-    } else {
-        if !io::stdout().is_terminal() {
-            return Err(io::Error::other("the chart needs a terminal; use --paper for plain output"));
-        }
-        let opts = tui::Options { span: cli.span.as_secs_f64(), lanes: cli.lanes, min: cli.min, max: cli.max };
-        tui::run(&mut rec, rx, opts)
-    }
+    let native = eframe::NativeOptions {
+        viewport: eframe::egui::ViewportBuilder::default()
+            .with_title("stripchart")
+            .with_app_id("stripchartw")
+            .with_inner_size(cli.size)
+            .with_min_inner_size([360.0, 240.0]),
+        ..Default::default()
+    };
+    eframe::run_native(
+        "stripchartw",
+        native,
+        Box::new(move |cc| Ok(Box::new(app::App::new(cc, rec, rx, opts)))),
+    )
+    .map_err(|e| io::Error::other(e.to_string()))
 }

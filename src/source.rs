@@ -1,7 +1,9 @@
 //! Input sources. Each runs on its own thread and sends timestamped lines.
 
 use std::f64::consts::TAU;
-use std::io::{self, Read};
+use std::fs::File;
+use std::io::{self, IsTerminal, Read};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::SyncSender;
 use std::thread;
@@ -12,6 +14,39 @@ pub enum Msg {
     Line(Instant, String),
     Eof,
     Error(String),
+}
+
+/// Start the input source chosen on the command line: test signals, a command
+/// run every `interval`, a file or device, or stdin.
+pub fn start(
+    input: Option<PathBuf>,
+    cmd: Option<String>,
+    demo: bool,
+    interval: Option<Duration>,
+    tx: SyncSender<Msg>,
+) -> io::Result<()> {
+    if demo {
+        spawn_demo(interval.unwrap_or(Duration::from_millis(50)), tx);
+    } else if let Some(cmd) = cmd {
+        spawn_command(cmd, interval.unwrap_or(Duration::from_secs(1)), tx);
+    } else {
+        match input {
+            Some(path) if path.as_os_str() != "-" => {
+                let file = File::open(&path)
+                    .map_err(|e| io::Error::new(e.kind(), format!("{}: {e}", path.display())))?;
+                spawn_reader(file, tx);
+            }
+            _ => {
+                if io::stdin().is_terminal() {
+                    return Err(io::Error::other(
+                        "no input: pipe data in, name a file, or use --cmd or --demo (see --help)",
+                    ));
+                }
+                spawn_reader(io::stdin(), tx);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Read lines from a stream (stdin, a file, a FIFO, a serial device).
@@ -62,7 +97,7 @@ pub fn spawn_command(cmd: String, interval: Duration, tx: SyncSender<Msg>) {
     thread::spawn(move || {
         let mut next = Instant::now();
         loop {
-            let msg = match Command::new("sh").arg("-c").arg(&cmd).stdin(Stdio::null()).output() {
+            let msg = match shell(&cmd).stdin(Stdio::null()).output() {
                 Ok(out) if out.status.success() => {
                     let text = String::from_utf8_lossy(&out.stdout).replace(['\n', '\r'], " ");
                     Msg::Line(Instant::now(), text)
@@ -89,6 +124,20 @@ pub fn spawn_command(cmd: String, interval: Duration, tx: SyncSender<Msg>) {
             }
         }
     });
+}
+
+#[cfg(windows)]
+fn shell(cmd: &str) -> Command {
+    let mut c = Command::new("cmd");
+    c.arg("/C").arg(cmd);
+    c
+}
+
+#[cfg(not(windows))]
+fn shell(cmd: &str) -> Command {
+    let mut c = Command::new("sh");
+    c.arg("-c").arg(cmd);
+    c
 }
 
 /// Built-in signal generator: a sine, a random walk and a lagged square wave.
