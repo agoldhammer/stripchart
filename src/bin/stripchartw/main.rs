@@ -93,6 +93,26 @@ fn main() -> ExitCode {
     }
 }
 
+/// Under WSLg, Wayland clients get no GPU device (Mesa prints EGL and ZINK
+/// warnings) and see the compositor drop the connection ("Broken pipe").
+/// XWayland works cleanly there, so use X11 when it is available.
+#[cfg(target_os = "linux")]
+fn prefer_x11() -> Option<eframe::EventLoopBuilderHook> {
+    use winit::platform::x11::EventLoopBuilderExtX11;
+    let wsl = std::env::var_os("WSL_DISTRO_NAME").is_some();
+    let x11 = std::env::var_os("DISPLAY").is_some();
+    (wsl && x11).then(|| -> eframe::EventLoopBuilderHook {
+        Box::new(|builder| {
+            builder.with_x11();
+        })
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn prefer_x11() -> Option<eframe::EventLoopBuilderHook> {
+    None
+}
+
 fn run(cli: Cli) -> io::Result<()> {
     if let (Some(lo), Some(hi)) = (cli.min, cli.max) {
         if lo >= hi {
@@ -113,6 +133,7 @@ fn run(cli: Cli) -> io::Result<()> {
             .with_app_id("stripchartw")
             .with_inner_size(cli.size)
             .with_min_inner_size([360.0, 240.0]),
+        event_loop_builder: prefer_x11(),
         ..Default::default()
     };
     eframe::run_native(

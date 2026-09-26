@@ -2251,6 +2251,7 @@ dependencies = [
  "clap",
  "crossterm",
  "eframe",
+ "winit",
 ]
 
 [[package]]
